@@ -32,6 +32,12 @@ export interface AnnotationItem {
   comment: string;
 }
 
+export interface PointChecklistItem {
+  materialPoint: string;
+  covered: boolean;
+  reason: string;
+}
+
 export interface GradeResponse {
   totalScore: number;
   rankPercentile: number;
@@ -39,4 +45,6 @@ export interface GradeResponse {
   comments: GradeComment[];
   advice: string;
   annotations: AnnotationItem[];
+  pointChecklist?: PointChecklistItem[];
+  reportMarkdown?: string;
 }

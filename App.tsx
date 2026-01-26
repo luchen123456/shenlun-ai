@@ -8,6 +8,8 @@ interface ReportPayload {
   text?: string;
   image?: string;
   topic?: string;
+  material?: string;
+  wordLimit?: number;
 }
 
 const App: React.FC = () => {
@@ -40,6 +42,8 @@ const App: React.FC = () => {
           text={reportPayload.text}
           topic={reportPayload.topic}
           image={reportPayload.image}
+          material={reportPayload.material}
+          wordLimit={reportPayload.wordLimit}
         />
       )}
       {currentView === 'annotation' && (
@@ -48,7 +52,16 @@ const App: React.FC = () => {
               or we could have rendered Report and put AnnotationView on top. 
               Let's re-render Report in the background to give that modal feeling if previous was report.
           */}
-          {previousView === 'report' && <Report onNavigate={() => {}} />} 
+          {previousView === 'report' && (
+            <Report
+              onNavigate={() => {}}
+              text={reportPayload.text}
+              topic={reportPayload.topic}
+              image={reportPayload.image}
+              material={reportPayload.material}
+              wordLimit={reportPayload.wordLimit}
+            />
+          )}
           <AnnotationView onClose={handleCloseAnnotation} />
         </>
       )}

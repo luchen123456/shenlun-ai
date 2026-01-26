@@ -2,7 +2,13 @@ import React, { useState } from 'react';
 import { ExamRecord } from '../types';
 
 interface DashboardProps {
-  onStartReport: (payload: { text?: string; image?: string; topic?: string }) => void;
+  onStartReport: (payload: {
+    text?: string;
+    image?: string;
+    topic?: string;
+    material?: string;
+    wordLimit?: number;
+  }) => void;
 }
 
 const recentRecords: ExamRecord[] = [
@@ -47,6 +53,9 @@ const recentRecords: ExamRecord[] = [
 const Dashboard: React.FC<DashboardProps> = ({ onStartReport }) => {
   const [imageData, setImageData] = useState<string | null>(null);
   const [imageName, setImageName] = useState<string | null>(null);
+  const [topic, setTopic] = useState('');
+  const [material, setMaterial] = useState('');
+  const [wordLimit, setWordLimit] = useState<number | ''>('');
   const [essayText, setEssayText] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -73,7 +82,22 @@ const Dashboard: React.FC<DashboardProps> = ({ onStartReport }) => {
       setError('请先选择图片再开始批改');
       return;
     }
-    onStartReport({ image: imageData });
+    if (!topic.trim()) {
+      setError('请先填写题目');
+      return;
+    }
+    if (!material.trim()) {
+      setError('请先粘贴材料内容');
+      return;
+    }
+    setError(null);
+    const normalizedWordLimit = typeof wordLimit === 'number' ? wordLimit : undefined;
+    onStartReport({
+      image: imageData,
+      topic: topic.trim(),
+      material: material.trim(),
+      wordLimit: normalizedWordLimit,
+    });
   };
 
   const handleStartTextGrading = () => {
@@ -81,7 +105,22 @@ const Dashboard: React.FC<DashboardProps> = ({ onStartReport }) => {
       setError('请先输入作答内容再开始批改');
       return;
     }
-    onStartReport({ text: essayText.trim() });
+    if (!topic.trim()) {
+      setError('请先填写题目');
+      return;
+    }
+    if (!material.trim()) {
+      setError('请先粘贴材料内容');
+      return;
+    }
+    setError(null);
+    const normalizedWordLimit = typeof wordLimit === 'number' ? wordLimit : undefined;
+    onStartReport({
+      text: essayText.trim(),
+      topic: topic.trim(),
+      material: material.trim(),
+      wordLimit: normalizedWordLimit,
+    });
   };
 
   return (
@@ -128,6 +167,52 @@ const Dashboard: React.FC<DashboardProps> = ({ onStartReport }) => {
               欢迎回来，教官。<br /> <span className="text-primary">请选择批改方式。</span>
             </h1>
             <p className="text-[#5e718d] mt-3 text-base">请选择如何输入学生作答内容以进行 AI 智能分析。</p>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-[#f0f2f5] p-5">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-semibold tracking-wide text-gray-500 uppercase">题目</label>
+                <input
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  placeholder="请输入题目（必填）"
+                  value={topic}
+                  onChange={(event) => setTopic(event.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2 md:col-span-2">
+                <label className="text-xs font-semibold tracking-wide text-gray-500 uppercase">材料</label>
+                <textarea
+                  className="w-full min-h-24 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  placeholder="粘贴材料原文（必填）"
+                  value={material}
+                  onChange={(event) => setMaterial(event.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-semibold tracking-wide text-gray-500 uppercase">作答字数要求</label>
+                <input
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  placeholder="可选，如 300"
+                  inputMode="numeric"
+                  value={wordLimit}
+                  onChange={(event) => {
+                    const raw = event.target.value.trim();
+                    if (!raw) {
+                      setWordLimit('');
+                      return;
+                    }
+                    const parsed = Number(raw);
+                    if (!Number.isFinite(parsed) || parsed <= 0) {
+                      setWordLimit('');
+                      return;
+                    }
+                    setWordLimit(Math.round(parsed));
+                  }}
+                />
+                <p className="text-[11px] text-gray-500">用于“格式规范”字数±10%判定。</p>
+              </div>
+            </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
             {/* Upload Card */}
@@ -249,7 +334,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onStartReport }) => {
                         <button 
                           className={`text-sm font-medium ${record.status === 'completed' ? 'text-primary hover:text-blue-700' : 'text-gray-400 cursor-not-allowed'}`}
                           disabled={record.status !== 'completed'}
-                          onClick={() => record.status === 'completed' && onStartReport({})}
+                          onClick={() => {
+                            if (record.status !== 'completed') {
+                              return;
+                            }
+                            setError('历史报告暂未接入，请在上方填写题目/材料并开始批改。');
+                          }}
                         >
                           {record.status === 'completed' ? '查看报告' : '分析中...'}
                         </button>

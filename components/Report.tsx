@@ -7,13 +7,15 @@ interface ReportProps {
   text?: string;
   topic?: string;
   image?: string;
+  material?: string;
+  wordLimit?: number;
 }
 
 const DEFAULT_TOPIC = '数字治理中的公共政策执行创新';
 const DEFAULT_TEXT =
   '数字治理背景下，公共政策执行需要更强的协同能力与可验证机制。应以问题导向完善跨部门协作，建设统一的数据标准与共享平台，并通过基层试点形成可复制经验。同时要建立数据伦理与隐私保护机制，确保执行过程既高效又规范。';
 
-const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image }) => {
+const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image, material, wordLimit }) => {
   const [grade, setGrade] = useState<GradeResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,6 +23,7 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image }) => {
 
   const requestText = text ?? '';
   const requestTopic = topic ?? DEFAULT_TOPIC;
+  const requestMaterial = material ?? '';
   const hasImage = Boolean(image);
 
   useEffect(() => {
@@ -32,6 +35,16 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image }) => {
         setGrade(null);
         return;
       }
+      if (!requestTopic?.trim()) {
+        setGrade(null);
+        setError('Missing topic');
+        return;
+      }
+      if (!requestMaterial.trim()) {
+        setGrade(null);
+        setError('Missing material');
+        return;
+      }
       setLoading(true);
       setError(null);
       setElapsedMs(0);
@@ -41,8 +54,8 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image }) => {
       }, 200);
       try {
         const payload = hasImage
-          ? { image, topic: requestTopic }
-          : { text: requestText, topic: requestTopic };
+          ? { image, topic: requestTopic, material: requestMaterial, wordLimit }
+          : { text: requestText, topic: requestTopic, material: requestMaterial, wordLimit };
         const response = await fetch('/api/grade', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -75,7 +88,7 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image }) => {
         window.clearInterval(timer);
       }
     };
-  }, [requestText, requestTopic, hasImage, image]);
+  }, [requestText, requestTopic, requestMaterial, wordLimit, hasImage, image]);
 
   const scoreValue = grade?.totalScore ?? 0;
   const rankPercentile = grade?.rankPercentile ?? 0;
