@@ -63,7 +63,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onStartReport }) => {
     event: React.ChangeEvent<HTMLInputElement>,
     kind: 'essay' | 'material'
   ) => {
-    const files = Array.from(event.target.files ?? []);
+    const files = Array.from(event.target.files ?? []) as File[];
     event.target.value = '';
     if (files.length === 0) {
       return;

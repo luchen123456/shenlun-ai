@@ -1,4 +1,4 @@
-import { gradeEssay, HttpError } from '../lib/gradeEssay.ts';
+import { gradeEssay, HttpError } from '../lib/gradeEssay.js';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { gradeEssay } from '../lib/gradeEssay.ts';
+import { gradeEssay } from '../lib/gradeEssay.js';
 
 type ProgressEvent = {
   stage:
