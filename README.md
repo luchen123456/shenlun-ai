@@ -38,7 +38,7 @@
 ```mermaid
 flowchart LR
   U[用户上传图片/文本] --> F[React + Vite 前端]
-  F -->|POST /api/grade| S[Vercel Serverless Function]
+  F -->|POST /api/grade 或 /api/grade-stream| S[Vercel Serverless Function]
   S -->|DashScope API| LLM[Qwen 多模态模型]
   LLM --> S
   S --> F
@@ -49,17 +49,19 @@ flowchart LR
 ```text
 /
 ├── api/
-│   └── grade.ts            # Serverless 评分接口
+│   ├── grade.ts            # Serverless 评分接口（JSON）
+│   └── grade-stream.ts     # Serverless 评分接口（SSE 流式进度）
 ├── components/
 │   ├── AnnotationView.tsx  # 批注视图
 │   ├── Dashboard.tsx       # 入口与导航
 │   ├── Report.tsx          # 评分报告
 │   └── ScoreRadar.tsx      # 雷达图
+├── lib/
+│   └── gradeEssay.ts       # DashScope 调用与评分解析（共享逻辑）
 ├── App.tsx                 # 视图路由与状态管理
 ├── index.tsx               # 应用入口
 ├── types.ts                # 类型定义
 ├── vite.config.ts          # Vite 配置
-├── vercel.json             # Vercel 配置
 └── package.json
 ```
 
@@ -68,17 +70,18 @@ flowchart LR
 
 ```bash
 npm install
-npm run dev
 ```
 
-说明：`/api/grade` 为 Vercel Serverless 路由。若需要本地联调，可使用 Vercel CLI 运行 serverless（`vercel dev`）。
+- 仅启动前端（不包含 `/api/*`）：`npm run dev`
+- 本地全栈联调（包含 `/api/grade` 与 `/api/grade-stream`）：`npx vercel@latest dev`
+
+说明：`/api/grade-stream` 使用 SSE 推送“批改进度”；若 SSE 在某些环境不可用，前端会自动回退为调用 `/api/grade` 获取最终结果。
 
 ## 环境变量配置
 在项目根目录创建 `.env.local`：
 
 ```bash
 DASHSCOPE_API_KEY=your_dashscope_api_key
-GEMINI_API_KEY=optional_if_using_gemini
 ```
 
 ## 部署说明
