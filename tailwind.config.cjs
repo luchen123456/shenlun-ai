@@ -1,5 +1,13 @@
 module.exports = {
-  content: ['./index.html', './**/*.{ts,tsx}'],
+  content: [
+    './index.html',
+    './App.tsx',
+    './index.tsx',
+    './types.ts',
+    './components/**/*.{ts,tsx}',
+    './api/**/*.{ts,tsx}',
+    './lib/**/*.{ts,tsx}',
+  ],
   theme: {
     extend: {
       colors: {
@@ -16,5 +24,5 @@ module.exports = {
       },
     },
   },
-  plugins: [require('@tailwindcss/forms'), require('@tailwindcss/container-queries')],
+  plugins: [require('@tailwindcss/forms'), require('@tailwindcss/container-queries'), require('@tailwindcss/typography')],
 };

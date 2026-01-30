@@ -5,9 +5,10 @@ interface DashboardProps {
   onStartReport: (payload: {
     text?: string;
     image?: string;
+    images?: string[];
     topic?: string;
     material?: string;
-    wordLimit?: number;
+    materialImages?: string[];
   }) => void;
 }
 
@@ -51,52 +52,69 @@ const recentRecords: ExamRecord[] = [
 ];
 
 const Dashboard: React.FC<DashboardProps> = ({ onStartReport }) => {
-  const [imageData, setImageData] = useState<string | null>(null);
-  const [imageName, setImageName] = useState<string | null>(null);
   const [topic, setTopic] = useState('');
   const [material, setMaterial] = useState('');
-  const [wordLimit, setWordLimit] = useState<number | ''>('');
+  const [materialImages, setMaterialImages] = useState<{ dataUrl: string; name: string }[]>([]);
+  const [essayImages, setEssayImages] = useState<{ dataUrl: string; name: string }[]>([]);
   const [essayText, setEssayText] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const handleImageChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) {
+  const handleImagesChange = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+    kind: 'essay' | 'material'
+  ) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (files.length === 0) {
       return;
     }
-    if (!file.type.startsWith('image/')) {
-      setError('请上传图片格式的答卷');
+
+    const imageFiles = files.filter((file) => file.type.startsWith('image/'));
+    if (imageFiles.length !== files.length) {
+      setError(kind === 'essay' ? '请上传图片格式的答卷' : '请上传图片格式的材料');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setImageData(reader.result as string);
-      setImageName(file.name);
+
+    try {
+      const items = await Promise.all(
+        imageFiles.map(
+          (file) =>
+            new Promise<{ dataUrl: string; name: string }>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve({ dataUrl: String(reader.result ?? ''), name: file.name });
+              reader.onerror = () => reject(new Error('Failed to read file'));
+              reader.readAsDataURL(file);
+            })
+        )
+      );
+
+      if (kind === 'essay') {
+        setEssayImages((prev) => [...prev, ...items]);
+      } else {
+        setMaterialImages((prev) => [...prev, ...items]);
+      }
       setError(null);
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      setError('读取图片失败，请重试');
+    }
   };
 
   const handleStartImageGrading = () => {
-    if (!imageData) {
+    if (essayImages.length === 0) {
       setError('请先选择图片再开始批改');
       return;
     }
-    if (!topic.trim()) {
-      setError('请先填写题目');
-      return;
-    }
-    if (!material.trim()) {
-      setError('请先粘贴材料内容');
+    if (!material.trim() && materialImages.length === 0) {
+      setError('请先上传材料图片或粘贴材料内容');
       return;
     }
     setError(null);
-    const normalizedWordLimit = typeof wordLimit === 'number' ? wordLimit : undefined;
     onStartReport({
-      image: imageData,
-      topic: topic.trim(),
-      material: material.trim(),
-      wordLimit: normalizedWordLimit,
+      image: essayImages[0]?.dataUrl,
+      images: essayImages.map((item) => item.dataUrl),
+      topic: topic.trim() ? topic.trim() : undefined,
+      material: material.trim() ? material.trim() : undefined,
+      materialImages: materialImages.map((item) => item.dataUrl),
     });
   };
 
@@ -105,23 +123,25 @@ const Dashboard: React.FC<DashboardProps> = ({ onStartReport }) => {
       setError('请先输入作答内容再开始批改');
       return;
     }
-    if (!topic.trim()) {
-      setError('请先填写题目');
-      return;
-    }
-    if (!material.trim()) {
-      setError('请先粘贴材料内容');
+    if (!material.trim() && materialImages.length === 0) {
+      setError('请先上传材料图片或粘贴材料内容');
       return;
     }
     setError(null);
-    const normalizedWordLimit = typeof wordLimit === 'number' ? wordLimit : undefined;
     onStartReport({
       text: essayText.trim(),
-      topic: topic.trim(),
-      material: material.trim(),
-      wordLimit: normalizedWordLimit,
+      topic: topic.trim() ? topic.trim() : undefined,
+      material: material.trim() ? material.trim() : undefined,
+      materialImages: materialImages.map((item) => item.dataUrl),
     });
   };
+
+  const essayFileLabel =
+    essayImages.length === 0
+      ? null
+      : essayImages.length === 1
+        ? essayImages[0].name
+        : `${essayImages[0].name} 等 ${essayImages.length} 张`;
 
   return (
     <div className="flex flex-col min-h-screen bg-background-light">
@@ -175,42 +195,47 @@ const Dashboard: React.FC<DashboardProps> = ({ onStartReport }) => {
                 <label className="text-xs font-semibold tracking-wide text-gray-500 uppercase">题目</label>
                 <input
                   className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/40"
-                  placeholder="请输入题目（必填）"
+                  placeholder="请输入题目（可选）"
                   value={topic}
                   onChange={(event) => setTopic(event.target.value)}
                 />
+                <p className="text-[11px] text-gray-500">提示：上传图片批改时，建议同时提供题目和材料，结果更准确。</p>
               </div>
               <div className="flex flex-col gap-2 md:col-span-2">
                 <label className="text-xs font-semibold tracking-wide text-gray-500 uppercase">材料</label>
                 <textarea
                   className="w-full min-h-24 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/40"
-                  placeholder="粘贴材料原文（必填）"
+                  placeholder="粘贴材料原文（可选：也可以上传材料图片）"
                   value={material}
                   onChange={(event) => setMaterial(event.target.value)}
                 />
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold tracking-wide text-gray-500 uppercase">作答字数要求</label>
-                <input
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/40"
-                  placeholder="可选，如 300"
-                  inputMode="numeric"
-                  value={wordLimit}
-                  onChange={(event) => {
-                    const raw = event.target.value.trim();
-                    if (!raw) {
-                      setWordLimit('');
-                      return;
-                    }
-                    const parsed = Number(raw);
-                    if (!Number.isFinite(parsed) || parsed <= 0) {
-                      setWordLimit('');
-                      return;
-                    }
-                    setWordLimit(Math.round(parsed));
-                  }}
-                />
-                <p className="text-[11px] text-gray-500">用于“格式规范”字数±10%判定。</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-gray-200 text-xs font-medium text-gray-700 shadow-sm hover:border-primary hover:text-primary transition-colors cursor-pointer">
+                    <span className="material-symbols-outlined text-[16px]">image</span>
+                    上传材料图片
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(event) => handleImagesChange(event, 'material')}
+                    />
+                  </label>
+                  {materialImages.length > 0 && (
+                    <span className="text-xs text-gray-500">已选 {materialImages.length} 张</span>
+                  )}
+                  {materialImages.length > 0 && (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-gray-200 text-xs font-medium text-gray-700 shadow-sm hover:border-red-300 hover:text-red-600 transition-colors"
+                      onClick={() => setMaterialImages([])}
+                    >
+                      <span className="material-symbols-outlined text-[16px]">delete</span>
+                      清空
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-gray-500">材料支持“图片 / 文本”二选一；也可同时提供。</p>
               </div>
             </div>
           </div>
@@ -230,10 +255,26 @@ const Dashboard: React.FC<DashboardProps> = ({ onStartReport }) => {
                   <label className="w-full flex items-center justify-center gap-2 bg-primary text-white hover:bg-blue-700 active:bg-blue-800 rounded-lg py-2.5 px-4 font-medium transition-colors cursor-pointer">
                     <span className="material-symbols-outlined text-[20px]">folder_open</span>
                     浏览文件
-                    <input type="file" accept="image/*" className="hidden" onChange={handleImageChange} />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(event) => handleImagesChange(event, 'essay')}
+                    />
                   </label>
-                  {imageName && (
-                    <div className="text-xs text-gray-500">已选择：{imageName}</div>
+                  {essayFileLabel && (
+                    <div className="flex items-center justify-between gap-3 text-xs text-gray-500">
+                      <span className="truncate">已选择：{essayFileLabel}</span>
+                      <button
+                        type="button"
+                        className="shrink-0 text-gray-500 hover:text-red-600"
+                        onClick={() => setEssayImages([])}
+                        title="清空"
+                      >
+                        清空
+                      </button>
+                    </div>
                   )}
                   <button
                     className="w-full flex items-center justify-center gap-2 bg-[#101418] text-white hover:bg-[#1f2a37] rounded-lg py-2.5 px-4 font-medium transition-colors"

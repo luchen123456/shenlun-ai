@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 import ScoreRadar from './ScoreRadar';
 import { GradeResponse } from '../types';
 
@@ -7,70 +9,236 @@ interface ReportProps {
   text?: string;
   topic?: string;
   image?: string;
+  images?: string[];
   material?: string;
-  wordLimit?: number;
+  materialImages?: string[];
 }
 
-const DEFAULT_TOPIC = '数字治理中的公共政策执行创新';
 const DEFAULT_TEXT =
   '数字治理背景下，公共政策执行需要更强的协同能力与可验证机制。应以问题导向完善跨部门协作，建设统一的数据标准与共享平台，并通过基层试点形成可复制经验。同时要建立数据伦理与隐私保护机制，确保执行过程既高效又规范。';
 
-const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image, material, wordLimit }) => {
+type GradeStage =
+  | 'idle'
+  | 'received'
+  | 'validating'
+  | 'calling_model'
+  | 'model_responded'
+  | 'parsing'
+  | 'done'
+  | 'error';
+
+type GradeProgress = {
+  stage: GradeStage;
+  percent: number;
+  message: string;
+};
+
+const stageLabel: Record<GradeStage, string> = {
+  idle: '准备中',
+  received: '已接收请求',
+  validating: '校验输入',
+  calling_model: '调用模型中',
+  model_responded: '模型已返回',
+  parsing: '解析结果中',
+  done: '批改完成',
+  error: '批改失败',
+};
+
+const clampPercent = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
+
+const safeRenderMarkdown = (markdown: string) => {
+  const html = marked.parse(markdown, { breaks: true, gfm: true }) as string;
+  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+};
+
+const Report: React.FC<ReportProps> = ({
+  onNavigate,
+  text,
+  topic,
+  image,
+  images,
+  material,
+  materialImages,
+}) => {
   const [grade, setGrade] = useState<GradeResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
+  const [progress, setProgress] = useState<GradeProgress>({
+    stage: 'idle',
+    percent: 0,
+    message: '准备中',
+  });
 
   const requestText = text ?? '';
-  const requestTopic = topic ?? DEFAULT_TOPIC;
+  const requestTopic = topic?.trim() ? topic.trim() : '未提供题目';
   const requestMaterial = material ?? '';
-  const hasImage = Boolean(image);
+  const normalizedImages = useMemo(() => {
+    return Array.isArray(images) ? images.filter(Boolean) : [];
+  }, [images]);
+  const normalizedMaterialImages = useMemo(() => {
+    return Array.isArray(materialImages) ? materialImages.filter(Boolean) : [];
+  }, [materialImages]);
+  const hasImage = Boolean(image) || normalizedImages.length > 0;
+  const previewImage = image ?? normalizedImages[0];
 
   useEffect(() => {
     const controller = new AbortController();
     let timer: number | undefined;
+
+    const setStage = (stage: GradeStage, percent: number, message?: string) => {
+      setProgress({ stage, percent: clampPercent(percent), message: message ?? stageLabel[stage] });
+    };
+
+    const buildPayload = () => {
+      const payload: any = { topic: requestTopic };
+      if (hasImage) {
+        if (normalizedImages.length > 0) {
+          payload.images = normalizedImages;
+        }
+        if (image) {
+          payload.image = image;
+        }
+      } else {
+        payload.text = requestText;
+      }
+      if (requestMaterial.trim()) {
+        payload.material = requestMaterial;
+      }
+      if (normalizedMaterialImages.length > 0) {
+        payload.materialImages = normalizedMaterialImages;
+      }
+      return payload;
+    };
+
+    const postJson = async () => {
+      const response = await fetch('/api/grade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildPayload()),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error('本地未启动 /api/grade（请使用 vercel dev 运行后端）');
+        }
+        throw new Error(`Grade request failed (${response.status})`);
+      }
+
+      const data: GradeResponse = await response.json();
+      setGrade(data);
+      setStage('done', 100, '批改完成');
+    };
+
+    const postStream = async () => {
+      const response = await fetch('/api/grade-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildPayload()),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error('本地未启动 /api/grade-stream（请使用 vercel dev 运行后端）');
+        }
+        throw new Error(`Grade request failed (${response.status})`);
+      }
+
+      const contentType = response.headers.get('content-type') ?? '';
+      if (!contentType.includes('text/event-stream') || !response.body) {
+        await postJson();
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let eventName = 'message';
+      let receivedResult = false;
+
+      const handleEvent = (name: string, dataText: string) => {
+        const text = dataText.trim();
+        if (!text) {
+          return;
+        }
+        try {
+          const data = JSON.parse(text);
+          if (name === 'progress') {
+            setStage(
+              (data?.stage as GradeStage) ?? 'calling_model',
+              typeof data?.percent === 'number' ? data.percent : 30,
+              typeof data?.message === 'string' ? data.message : undefined
+            );
+            return;
+          }
+          if (name === 'result') {
+            setGrade(data as GradeResponse);
+            setStage('done', 100, '批改完成');
+            receivedResult = true;
+            return;
+          }
+          if (name === 'error') {
+            setStage('error', 100, '批改失败');
+            setError(typeof data?.message === 'string' ? data.message : 'Failed to fetch grade');
+          }
+        } catch {
+          // ignore
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split('\n\n');
+        buffer = chunks.pop() ?? '';
+        for (const chunk of chunks) {
+          const lines = chunk.split('\n').map((line) => line.trimEnd());
+          const dataLines: string[] = [];
+          for (const line of lines) {
+            if (line.startsWith('event:')) {
+              eventName = line.slice('event:'.length).trim() || 'message';
+            } else if (line.startsWith('data:')) {
+              dataLines.push(line.slice('data:'.length).trimStart());
+            }
+          }
+          handleEvent(eventName, dataLines.join('\n'));
+        }
+      }
+
+      if (!controller.signal.aborted && !receivedResult) {
+        await postJson();
+      }
+    };
 
     const fetchGrade = async () => {
       if (!hasImage && !requestText) {
         setGrade(null);
         return;
       }
-      if (!requestTopic?.trim()) {
+      if (!requestMaterial.trim() && normalizedMaterialImages.length === 0) {
         setGrade(null);
-        setError('Missing topic');
-        return;
-      }
-      if (!requestMaterial.trim()) {
-        setGrade(null);
-        setError('Missing material');
+        setError('请先上传材料图片或粘贴材料文本');
         return;
       }
       setLoading(true);
       setError(null);
       setElapsedMs(0);
+      setStage('received', 5, '已开始批改');
       const startedAt = Date.now();
       timer = window.setInterval(() => {
         setElapsedMs(Date.now() - startedAt);
       }, 200);
       try {
-        const payload = hasImage
-          ? { image, topic: requestTopic, material: requestMaterial, wordLimit }
-          : { text: requestText, topic: requestTopic, material: requestMaterial, wordLimit };
-        const response = await fetch('/api/grade', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`Grade request failed (${response.status})`);
-        }
-
-        const data: GradeResponse = await response.json();
-        setGrade(data);
+        setStage('validating', 10, '校验输入中');
+        await postStream();
       } catch (err: any) {
         if (err?.name !== 'AbortError') {
+          setStage('error', 100, '批改失败');
           setError(err?.message ?? 'Failed to fetch grade');
         }
       } finally {
@@ -88,7 +256,15 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image, materia
         window.clearInterval(timer);
       }
     };
-  }, [requestText, requestTopic, requestMaterial, wordLimit, hasImage, image]);
+  }, [
+    requestText,
+    requestTopic,
+    requestMaterial,
+    hasImage,
+    image,
+    normalizedImages,
+    normalizedMaterialImages,
+  ]);
 
   const scoreValue = grade?.totalScore ?? 0;
   const rankPercentile = grade?.rankPercentile ?? 0;
@@ -120,12 +296,43 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image, materia
       .slice(0, 3);
   }, [negativeContent]);
 
+  const nextSteps = useMemo(() => {
+    const uncovered = (grade?.pointChecklist ?? []).filter((item) => item && item.covered === false).slice(0, 3);
+    if (uncovered.length > 0) {
+      return uncovered.map((item, index) => ({
+        id: `${index}_${item.materialPoint}`,
+        title: `补齐要点：${item.materialPoint}`,
+        desc: item.reason || '该要点未在作答中体现，建议补充对应内容与表达。',
+      }));
+    }
+    if (grade?.advice?.trim()) {
+      return [
+        { id: 'advice_1', title: '按建议逐条改写', desc: '结合 AI 建议对关键段落进行二次改写并复核要点覆盖。' },
+        { id: 'advice_2', title: '补充材料关键信息', desc: '优先补齐材料中的核心要点，避免遗漏导致失分。' },
+        { id: 'advice_3', title: '优化结构与表达', desc: '用“总-分-总/一二三”结构，删冗余、补连接词。' },
+      ];
+    }
+    return [
+      { id: 'wait_1', title: '等待生成建议', desc: '批改完成后，这里会显示针对你作答的下一步提升建议。' },
+      { id: 'wait_2', title: '提供题目与材料', desc: '题目/材料越完整，模型提炼要点与评分越准确。' },
+      { id: 'wait_3', title: '检查图片清晰度', desc: '手写图片建议清晰、正向、无遮挡，便于识别。' },
+    ];
+  }, [grade?.advice, grade?.pointChecklist]);
+
   const elapsedSeconds = Math.max(0, Math.round(elapsedMs / 100) / 10);
   const progressPercent = loading
     ? Math.min(95, Math.round((elapsedMs / 15000) * 100))
     : grade
       ? 100
       : 0;
+  const effectivePercent = loading ? Math.max(progress.percent, progressPercent) : progress.percent;
+
+  const markdownHtml = useMemo(() => {
+    if (!grade?.reportMarkdown) {
+      return '';
+    }
+    return safeRenderMarkdown(grade.reportMarkdown);
+  }, [grade?.reportMarkdown]);
   return (
     <div className="flex flex-col min-h-screen bg-background-light">
       {/* Report Header */}
@@ -183,6 +390,26 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image, materia
               <p className="text-sm font-medium text-primary bg-blue-50 px-4 py-1.5 rounded-full">
                 {grade ? `成绩良好，超越 ${rankPercentile}% 考生` : '等待批改结果'}
               </p>
+              {loading && !error && (
+                <div className="mt-3 w-full max-w-[260px] mx-auto text-left">
+                  <div className="flex items-center justify-between text-[11px] text-gray-500">
+                    <span>批改中：{progress.message}</span>
+                    <span>{effectivePercent}%</span>
+                  </div>
+                  <div className="mt-2 h-2 w-full rounded-full bg-gray-100">
+                    <div
+                      className="h-2 rounded-full bg-primary transition-all"
+                      style={{ width: `${effectivePercent}%` }}
+                    ></div>
+                  </div>
+                </div>
+              )}
+              {error && (
+                <div className="mt-3 w-full max-w-[260px] mx-auto text-left rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                  <div className="text-[11px] font-semibold text-red-700">批改失败</div>
+                  <div className="mt-1 text-[11px] text-red-600/90 break-words">{error}</div>
+                </div>
+              )}
             </div>
           </div>
           <div className="flex flex-col gap-4">
@@ -219,28 +446,50 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image, materia
         {/* Main Content Area */}
         <main className="flex-1 lg:ml-[360px] p-4 md:p-8 lg:p-10 flex flex-col gap-8">
           {(loading || error) && (
-            <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
-              {loading ? `AI grading in progress... (${elapsedSeconds}s)` : `Grading failed: ${error}`}
+            <div
+              className={`rounded-lg border px-4 py-3 text-sm ${
+                error ? 'border-red-200 bg-red-50 text-red-700' : 'border-yellow-200 bg-yellow-50 text-yellow-800'
+              }`}
+            >
+              {error ? (
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1">
+                    <div className="font-semibold">批改失败</div>
+                    <div className="mt-1 text-xs opacity-90 break-words">{error}</div>
+                  </div>
+                  <button
+                    className="shrink-0 rounded-lg bg-white border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50"
+                    onClick={() => onNavigate('dashboard')}
+                  >
+                    返回重试
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-4">
+                  <span className="font-semibold">批改中：{progress.message}</span>
+                  <span className="text-xs">{elapsedSeconds}s</span>
+                </div>
+              )}
             </div>
           )}
           {loading && (
             <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-4">
               <div className="flex items-center justify-between text-xs font-medium text-blue-700">
                 <span>识别并批改中</span>
-                <span>{progressPercent}%</span>
+                <span>{effectivePercent}%</span>
               </div>
               <div className="mt-2 h-2 w-full rounded-full bg-blue-100">
                 <div
                   className="h-2 rounded-full bg-blue-600 transition-all"
-                  style={{ width: `${progressPercent}%` }}
+                  style={{ width: `${effectivePercent}%` }}
                 ></div>
               </div>
               <p className="mt-2 text-xs text-blue-700/80">
-                预计 10-20 秒，已耗时 {elapsedSeconds}s
+                阶段：{stageLabel[progress.stage]} · 预计 10-30 秒 · 已耗时 {elapsedSeconds}s
               </p>
             </div>
           )}
-          {hasImage && (
+          {hasImage && previewImage && (
             <div className="rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
               <div className="flex items-center justify-between">
                 <div>
@@ -250,7 +499,7 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image, materia
               </div>
               <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
                 <img
-                  src={image as string}
+                  src={previewImage as string}
                   alt="Uploaded essay"
                   className="max-h-60 w-full object-contain"
                 />
@@ -320,65 +569,45 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image, materia
           </div>
 
           <div className="flex flex-col gap-4">
-            <h2 className="text-xl font-bold px-1">维度深度分析</h2>
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-              <div className="flex border-b border-gray-100 overflow-x-auto scrollbar-hide">
-                <button className="px-6 py-4 text-sm font-bold border-b-2 border-primary text-primary hover:bg-gray-50 transition-colors whitespace-nowrap">
-                  观点论证
-                </button>
-                <button className="px-6 py-4 text-sm font-bold border-b-2 border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors whitespace-nowrap">
-                  逻辑脉络
-                </button>
-                <button className="px-6 py-4 text-sm font-bold border-b-2 border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors whitespace-nowrap">
-                  语言表达
-                </button>
-                <button className="px-6 py-4 text-sm font-bold border-b-2 border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors whitespace-nowrap">
-                  卷面结构
-                </button>
+            <h2 className="text-xl font-bold px-1">{grade?.reportMarkdown ? '深度分析正文' : '维度深度分析'}</h2>
+            {grade?.reportMarkdown ? (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 md:p-8">
+                <div
+                  className="prose prose-slate max-w-none prose-table:text-sm prose-th:bg-gray-50 prose-th:font-semibold prose-td:align-top"
+                  dangerouslySetInnerHTML={{ __html: markdownHtml }}
+                />
               </div>
-              <div className="p-6 md:p-8 flex flex-col gap-8">
-                <div className="flex items-start gap-4">
-                  <div className="bg-yellow-50 p-2 rounded-lg text-yellow-600 mt-1">
-                    <span className="material-symbols-outlined">lightbulb</span>
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold mb-1">论证深度有待加强</h3>
-                    <p className="text-sm text-gray-600 leading-relaxed">
-                      您关于“数字鸿沟”的论述在理论上是成立的，但缺乏实际应用层面的探讨。整合2023年数字部门报告中的案例研究将使这一部分从理论走向实践，更具说服力。
-                    </p>
-                  </div>
+            ) : (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="flex border-b border-gray-100 overflow-x-auto scrollbar-hide">
+                  <button className="px-6 py-4 text-sm font-bold border-b-2 border-primary text-primary hover:bg-gray-50 transition-colors whitespace-nowrap">
+                    观点论证
+                  </button>
+                  <button className="px-6 py-4 text-sm font-bold border-b-2 border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors whitespace-nowrap">
+                    逻辑脉络
+                  </button>
+                  <button className="px-6 py-4 text-sm font-bold border-b-2 border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors whitespace-nowrap">
+                    语言表达
+                  </button>
+                  <button className="px-6 py-4 text-sm font-bold border-b-2 border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors whitespace-nowrap">
+                    卷面结构
+                  </button>
                 </div>
-                <div className="rounded-lg bg-gray-50 border border-gray-200 p-6 relative">
-                  <div className="absolute top-0 right-0 bg-gray-200 text-[10px] font-bold px-2 py-1 rounded-bl-lg text-gray-600 uppercase">第三段节选</div>
-                  <p className="font-serif text-lg leading-loose text-gray-800">
-                    ……因此，政府必须严格执行数字优先政策。<span 
-                      className="bg-yellow-100 text-gray-900 px-1 rounded ring-2 ring-yellow-400/50 cursor-help relative group"
-                      onClick={() => onNavigate('annotation')}
-                    >
-                      然而，这种做法往往忽视了缺乏数字素养的老年人群体。
-                      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 bg-gray-900 text-white text-xs p-3 rounded shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20 leading-normal font-sans">
-                        点评：反驳有力，但此处需要提出具体的解决方案（例如：混合服务中心）。
-                        <span className="tooltip-arrow border-t-gray-900"></span>
-                      </span>
-                    </span> 
-                    因此，必须寻求平衡，以确保所有公民无论技术水平如何都能公平地获得服务……
-                  </p>
-                </div>
-                <div className="flex flex-col gap-3">
-                  <h4 className="text-xs font-bold uppercase text-gray-400 tracking-wider">具体改进建议</h4>
-                  <div className="flex flex-wrap gap-2">
-                    <button className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-gray-200 text-xs font-medium text-gray-700 shadow-sm hover:border-primary hover:text-primary transition-colors">
-                      <span className="material-symbols-outlined text-[16px] text-primary">add</span>
-                      引用2023年统计数据
-                    </button>
-                    <button className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-gray-200 text-xs font-medium text-gray-700 shadow-sm hover:border-primary hover:text-primary transition-colors">
-                      <span className="material-symbols-outlined text-[16px] text-primary">add</span>
-                      提及“全渠道服务”
-                    </button>
+                <div className="p-6 md:p-8 flex flex-col gap-8">
+                  <div className="flex items-start gap-4">
+                    <div className="bg-yellow-50 p-2 rounded-lg text-yellow-600 mt-1">
+                      <span className="material-symbols-outlined">lightbulb</span>
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold mb-1">等待模型生成维度分析</h3>
+                      <p className="text-sm text-gray-600 leading-relaxed">
+                        批改完成后，将展示基于材料与作答生成的深度分析正文（含要点核对表、亮点与改进建议）。
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="bg-gradient-to-r from-[#0f172a] to-[#1e293b] rounded-xl p-6 md:p-8 shadow-lg text-white relative overflow-hidden group">
@@ -390,7 +619,9 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image, materia
                   <span className="bg-white/10 p-2 rounded-lg material-symbols-outlined">flag</span>
                   <h2 className="text-xl font-bold">下一步提升建议</h2>
                 </div>
-                <p className="text-blue-100 mb-6 max-w-lg leading-relaxed">{grade?.advice ?? 'No additional advice.'}</p>
+                <p className="text-blue-100 mb-6 max-w-lg leading-relaxed">
+                  {grade?.advice?.trim() ? grade.advice : '批改完成后，将在此给出针对你作答的改进建议。'}
+                </p>
                 <button className="bg-white text-[#0f172a] hover:bg-gray-100 font-bold px-5 py-2.5 rounded-lg text-sm transition-colors flex items-center gap-2">
                   加入学习计划
                   <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
@@ -398,43 +629,22 @@ const Report: React.FC<ReportProps> = ({ onNavigate, text, topic, image, materia
               </div>
               <div className="flex-1 w-full bg-white/5 backdrop-blur-sm rounded-lg border border-white/10 p-5">
                 <ul className="space-y-4">
-                  <li className="flex gap-4">
-                    <div className="bg-primary/80 size-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-xs font-bold">1</div>
-                    <div>
-                      <h4 className="font-bold text-sm">背诵关键政策数据</h4>
-                      <p className="text-xs text-gray-300 mt-1">重点关注数字部门发布的2023年老年人适应率数据。</p>
-                    </div>
-                  </li>
-                  <li className="flex gap-4">
-                    <div className="bg-primary/80 size-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-xs font-bold">2</div>
-                    <div>
-                      <h4 className="font-bold text-sm">练习逻辑连接词</h4>
-                      <p className="text-xs text-gray-300 mt-1">复习“逻辑连接词”模块，使段落过渡更流畅。</p>
-                    </div>
-                  </li>
-                  <li className="flex gap-4">
-                    <div className="bg-primary/80 size-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-xs font-bold">3</div>
-                    <div>
-                      <h4 className="font-bold text-sm">扩充专业词汇</h4>
-                      <p className="text-xs text-gray-300 mt-1">寻找3个“数字化转型”的同义表达以避免重复。</p>
-                    </div>
-                  </li>
+                  {nextSteps.map((item, index) => (
+                    <li key={item.id} className="flex gap-4">
+                      <div className="bg-primary/80 size-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-xs font-bold">
+                        {index + 1}
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-sm">{item.title}</h4>
+                        <p className="text-xs text-gray-300 mt-1">{item.desc}</p>
+                      </div>
+                    </li>
+                  ))}
                 </ul>
               </div>
             </div>
           </div>
 
-          {grade && (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-base font-bold text-[#101418]">输出结果展示</h2>
-                <span className="text-xs text-gray-400">JSON</span>
-              </div>
-              <pre className="text-xs text-gray-700 bg-gray-50 border border-gray-100 rounded-lg p-4 overflow-auto max-h-80">
-                {JSON.stringify(grade, null, 2)}
-              </pre>
-            </div>
-          )}
           <div className="mt-8 pt-8 border-t border-gray-200 flex justify-between text-sm text-gray-500">
             <p>© 2024 申论智能批改助手</p>
             <div className="flex gap-4">

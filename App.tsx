@@ -7,9 +7,10 @@ import { ViewState } from './types';
 interface ReportPayload {
   text?: string;
   image?: string;
+  images?: string[];
   topic?: string;
   material?: string;
-  wordLimit?: number;
+  materialImages?: string[];
 }
 
 const App: React.FC = () => {
@@ -37,14 +38,15 @@ const App: React.FC = () => {
     <div className="min-h-screen">
       {currentView === 'dashboard' && <Dashboard onStartReport={handleStartReport} />}
       {currentView === 'report' && (
-        <Report
-          onNavigate={handleNavigate}
-          text={reportPayload.text}
-          topic={reportPayload.topic}
-          image={reportPayload.image}
-          material={reportPayload.material}
-          wordLimit={reportPayload.wordLimit}
-        />
+          <Report
+            onNavigate={handleNavigate}
+            text={reportPayload.text}
+            topic={reportPayload.topic}
+            image={reportPayload.image}
+            images={reportPayload.images}
+            material={reportPayload.material}
+            materialImages={reportPayload.materialImages}
+          />
       )}
       {currentView === 'annotation' && (
         <>
@@ -58,8 +60,9 @@ const App: React.FC = () => {
               text={reportPayload.text}
               topic={reportPayload.topic}
               image={reportPayload.image}
+              images={reportPayload.images}
               material={reportPayload.material}
-              wordLimit={reportPayload.wordLimit}
+              materialImages={reportPayload.materialImages}
             />
           )}
           <AnnotationView onClose={handleCloseAnnotation} />

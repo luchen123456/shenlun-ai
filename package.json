@@ -9,14 +9,18 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tailwindcss/typography": "^0.5.19",
     "dashscope": "^1.0.1",
-    "react-dom": "^19.2.3",
+    "dompurify": "^3.3.1",
+    "marked": "^17.0.1",
     "react": "^19.2.3",
+    "react-dom": "^19.2.3",
     "recharts": "^3.6.0"
   },
   "devDependencies": {
     "@tailwindcss/container-queries": "^0.1.1",
     "@tailwindcss/forms": "^0.5.10",
+    "@types/dompurify": "^3.0.5",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.19",
