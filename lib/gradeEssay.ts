@@ -1,4 +1,5 @@
-import { GENERATION_URL, payload } from 'dashscope';
+const TEXT_GENERATION_URL =
+  'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
 
 const MULTIMODAL_URL =
   'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
@@ -125,6 +126,39 @@ export class HttpError extends Error {
   }
 }
 
+const dashscopeRequest = async (url: string, body: any) => {
+  const apiKey = process.env.DASHSCOPE_API_KEY;
+  if (!apiKey) {
+    throw new HttpError(500, 'Missing DASHSCOPE_API_KEY');
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const text = await response.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    // ignore
+  }
+
+  if (!response.ok) {
+    throw new HttpError(response.status, 'DashScope request failed', {
+      status: response.status,
+      statusText: response.statusText,
+      body: json ?? text,
+    });
+  }
+  return json;
+};
+
 export const gradeEssay = async (body: any) => {
   if (!process.env.DASHSCOPE_API_KEY) {
     throw new HttpError(500, 'Missing DASHSCOPE_API_KEY');
@@ -193,7 +227,7 @@ export const gradeEssay = async (body: any) => {
         result_format: 'message',
       },
     };
-    response = await payload(MULTIMODAL_URL, requestData);
+    response = await dashscopeRequest(MULTIMODAL_URL, requestData);
   } else {
     const materialText = `\n\n材料：\n${normalizedMaterialText}`;
     const wordLimitText =
@@ -214,7 +248,7 @@ export const gradeEssay = async (body: any) => {
         temperature: 0.2,
       },
     };
-    response = await payload(GENERATION_URL, requestData);
+    response = await dashscopeRequest(TEXT_GENERATION_URL, requestData);
   }
 
   const content = normalizeContent(response?.output?.choices?.[0]?.message?.content ?? response?.output?.text);
@@ -226,4 +260,3 @@ export const gradeEssay = async (body: any) => {
 
   return JSON.parse(jsonText);
 };
-

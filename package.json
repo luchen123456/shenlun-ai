@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@tailwindcss/typography": "^0.5.19",
-    "dashscope": "^1.0.1",
     "dompurify": "^3.3.1",
     "marked": "^17.0.1",
     "react": "^19.2.3",
